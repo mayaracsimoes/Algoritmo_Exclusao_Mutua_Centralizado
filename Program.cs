@@ -21,6 +21,7 @@ class Processo
 {
     public int Id { get; }
     public DateTime CriadoEm { get; }
+    public bool IsCoordenador { get; set; }
 
     public bool EhCoordenador { get; set; }
 
@@ -46,6 +47,12 @@ class Coordenador
     {
         return _processoCoordenador != null;
     }
+
+    public bool TemCoordenador()
+    {
+        return _coordenador != null;
+    }
+
     public void AdicionarProcesso(Processo processo)
     {
         lock (_lock)
@@ -194,6 +201,7 @@ class Program
             Thread.Sleep(1000); // Verifica a fila a cada 1 segundo
             _coordenador.ProcessarFila();
 
+
             // Verifica se 1 minuto se passou desde a última morte
             if ((DateTime.Now - _ultimaMorteCoordenador).TotalMinutes >= 1)
             {
@@ -235,7 +243,7 @@ class Program
 
     static void RunProcesso(Processo processo)
     {
-        while (true)
+        while (!processo.IsCoordenador)
         {
             try
             {
