@@ -15,43 +15,37 @@
 // a lista deve contem o ID do processo e a data  hora que foi criado (eu acho)
 // o coordenador pode ser de acesso global 
 // o processo tenta a cada 10-25 segundos o recurso, so é adicionado na fila se ainda nao tiver
+using System.Threading;
+
 class Processo
 {
     public int Id { get; }
     public DateTime CriadoEm { get; }
     public bool IsCoordenador { get; set; }
 
+    public bool EhCoordenador { get; set; }
+
     public Processo(int id)
     {
         Id = id;
         CriadoEm = DateTime.Now;
-        IsCoordenador = false
+        EhCoordenador = false;
     }
 }
 
 class Coordenador
 {
-    private static Coordenador _coordenador;
+    private static Processo _processoCoordenador;
     private static readonly object _lock = new object();
     private List<Processo> _fila = new List<Processo>();
     private List<bool> _recursosDisponiveis = new List<bool> { true, true }; // Dois recursos
     private Random _random = new Random();
+   
+    public Coordenador() { }
 
-    private Coordenador() { }
-
-    public static Coordenador Instance
+    public bool TemCoordenador()
     {
-        get
-        {
-            lock (_lock)
-            {
-                if (_coordenador == null)
-                {
-                    _coordenador = new Coordenador();
-                }
-                return _coordenador;
-            }
-        }
+        return _processoCoordenador != null;
     }
 
     public bool TemCoordenador()
@@ -63,7 +57,7 @@ class Coordenador
     {
         lock (_lock)
         {
-            if (!_fila.Contains(processo))
+            if (!_fila.Contains(processo) && !processo.EhCoordenador)
             {
                 _fila.Add(processo);
                 Console.WriteLine($"[{DateTime.Now}] Processo {processo.Id} adicionado à fila.");
@@ -120,19 +114,32 @@ class Coordenador
             _fila.Clear();
             _recursosDisponiveis = new List<bool> { true, true }; // Reseta os recursos
             Console.WriteLine($"[{DateTime.Now}] Coordenador morreu. Fila limpa e recursos resetados.");
-            _coordenador = null;
+            _processoCoordenador = null;
         }
     }
 
-    public Processo EscolherNovoCoordenador(List<Processo> processos)
+    public void EscolherNovoCoordenador(List<Processo> processos, List<Thread> processosThreads)
     {
         lock (_lock)
         {
             if (processos.Count == 0)
-                return null;
+                return;
 
             int index = _random.Next(processos.Count);
-            return processos[index];
+            Processo novoCoordenador = processos[index];
+
+            _processoCoordenador = novoCoordenador;
+            processos[index].EhCoordenador = true;
+            // Encontra e interrompe a thread do novo coordenador
+            if (index != -1 && index < processosThreads.Count)
+            {
+                processosThreads[index].Interrupt();
+                Console.WriteLine($"[{DateTime.Now}] Thread do Processo {novoCoordenador.Id} interrompida (agora é coordenador).");
+            }
+
+            processos.RemoveAt(index);
+
+            Console.WriteLine($"[{DateTime.Now}] Novo coordenador escolhido: Processo {novoCoordenador.Id}");
         }
     }
 
@@ -167,12 +174,15 @@ class Program
     private static List<Processo> _processos = new List<Processo>();
     private static Random _random = new Random();
     private static int _nextId = 1;
+    static DateTime _ultimaMorteCoordenador = DateTime.Now; // Armazena o momento da última morte
+
+    public static Coordenador _coordenador = new Coordenador();
+    public static List<Thread> _processoThreads = new List<Thread>();
 
     static void Main(string[] args)
     {
-        
 
-        Thread criarProcessosThread = new Thread(CriarProcessos);
+        Thread criarProcessosThread = new Thread(() => CriarProcessos(true));
         criarProcessosThread.Start();
 
         Thread coordenadorThread = new Thread(RunCoordenador);
@@ -189,37 +199,45 @@ class Program
         while (true)
         {
             Thread.Sleep(1000); // Verifica a fila a cada 1 segundo
-            Coordenador.Instance.ProcessarFila();
+            _coordenador.ProcessarFila();
 
-            if (DateTime.Now.Second % 60 == 0) 
+
+            // Verifica se 1 minuto se passou desde a última morte
+            if ((DateTime.Now - _ultimaMorteCoordenador).TotalMinutes >= 1)
             {
-                Coordenador.Instance.Morrer();
+                _coordenador.Morrer();
+                _ultimaMorteCoordenador = DateTime.Now; // Atualiza o momento da última morte
             }
 
-            // Coordenador morre a cada 1 minuto
-            if (!Coordenador.Instance.TemCoordenador())
+            if (!_coordenador.TemCoordenador())
             {
-                var novoCoordenador = Coordenador.Instance.EscolherNovoCoordenador(_processos);
-                if (novoCoordenador != null)
-                {
-                    Console.WriteLine($"[{DateTime.Now}] Novo coordenador escolhido: Processo {novoCoordenador.Id}");
-                }
+                _coordenador.EscolherNovoCoordenador(_processos, _processoThreads);
+
             }
         }
     }
 
-    static void CriarProcessos()
+    static void CriarProcessos(bool PrimeiraExecucao)
     {
         while (true)
         {
-            Thread.Sleep(40000); // Cria um novo processo a cada 40 segundos
+            if (!PrimeiraExecucao)
+            {
+
+                Thread.Sleep(40000); // Cria um novo processo a cada 40 segundos
+            }
+
             int id = _nextId++;
             var processo = new Processo(id);
+
             _processos.Add(processo);
+            Thread processoThread = new Thread(() => RunProcesso(processo));
+            _processoThreads.Add(processoThread); // Armazena a thread na lista
+            processoThread.Start();
+            PrimeiraExecucao = false;
+
             Console.WriteLine($"[{DateTime.Now}] Processo {processo.Id} criado.");
 
-            Thread processoThread = new Thread(() => RunProcesso(processo));
-            processoThread.Start();
         }
     }
 
@@ -227,8 +245,18 @@ class Program
     {
         while (!processo.IsCoordenador)
         {
-            Thread.Sleep(_random.Next(10000, 25000)); // Tenta acessar o recurso a cada 10-25 segundos
-            Coordenador.Instance.AdicionarProcesso(processo);
+            try
+            {
+                Thread.Sleep(_random.Next(10000, 25000)); // Tenta acessar o recurso a cada 10-25 segundos
+                _coordenador.AdicionarProcesso(processo);
+            }
+            catch (ThreadInterruptedException)
+            {
+                // Captura a interrupção da thread
+                //Console.WriteLine($"[{DateTime.Now}] Processo {processo.Id} foi interrompido ao se tornar coordenador.");
+                break; // Sai do loop para encerrar a thread
+            }
+
         }
     }
 }
