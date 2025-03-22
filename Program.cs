@@ -19,11 +19,13 @@ class Processo
 {
     public int Id { get; }
     public DateTime CriadoEm { get; }
+    public bool IsCoordenador { get; set; }
 
     public Processo(int id)
     {
         Id = id;
         CriadoEm = DateTime.Now;
+        IsCoordenador = false
     }
 }
 
@@ -50,6 +52,11 @@ class Coordenador
                 return _coordenador;
             }
         }
+    }
+
+    public bool TemCoordenador()
+    {
+        return _coordenador != null;
     }
 
     public void AdicionarProcesso(Processo processo)
@@ -163,11 +170,13 @@ class Program
 
     static void Main(string[] args)
     {
-        Thread coordenadorThread = new Thread(RunCoordenador);
-        coordenadorThread.Start();
+        
 
         Thread criarProcessosThread = new Thread(CriarProcessos);
         criarProcessosThread.Start();
+
+        Thread coordenadorThread = new Thread(RunCoordenador);
+        coordenadorThread.Start();
 
         while (true)
         {
@@ -182,11 +191,14 @@ class Program
             Thread.Sleep(1000); // Verifica a fila a cada 1 segundo
             Coordenador.Instance.ProcessarFila();
 
-            // Coordenador morre a cada 1 minuto
-            if (DateTime.Now.Second % 60 == 0)
+            if (DateTime.Now.Second % 60 == 0) 
             {
                 Coordenador.Instance.Morrer();
+            }
 
+            // Coordenador morre a cada 1 minuto
+            if (!Coordenador.Instance.TemCoordenador())
+            {
                 var novoCoordenador = Coordenador.Instance.EscolherNovoCoordenador(_processos);
                 if (novoCoordenador != null)
                 {
@@ -213,7 +225,7 @@ class Program
 
     static void RunProcesso(Processo processo)
     {
-        while (true)
+        while (!processo.IsCoordenador)
         {
             Thread.Sleep(_random.Next(10000, 25000)); // Tenta acessar o recurso a cada 10-25 segundos
             Coordenador.Instance.AdicionarProcesso(processo);
