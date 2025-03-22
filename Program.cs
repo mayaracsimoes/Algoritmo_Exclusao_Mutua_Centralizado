@@ -48,11 +48,6 @@ class Coordenador
         return _processoCoordenador != null;
     }
 
-    public bool TemCoordenador()
-    {
-        return _coordenador != null;
-    }
-
     public void AdicionarProcesso(Processo processo)
     {
         lock (_lock)
