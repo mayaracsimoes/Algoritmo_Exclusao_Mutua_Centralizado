@@ -22,24 +22,38 @@ class Processo
     public int Id { get; }
     public DateTime CriadoEm { get; }
     public bool IsCoordenador { get; set; }
-
-    public bool EhCoordenador { get; set; }
+    public bool IsAcessandoRecurso { get; set; }
 
     public Processo(int id)
     {
         Id = id;
         CriadoEm = DateTime.Now;
-        EhCoordenador = false;
+        IsCoordenador = false;
+        IsAcessandoRecurso = false;
+    }
+
+    public bool PodeAcessarRecurso() 
+    {
+        return !IsCoordenador && !IsAcessandoRecurso;
+    }
+
+    public void WaitLiberarRecurso()
+    {
+        while (IsAcessandoRecurso) 
+        {
+            // waiting...
+        }
     }
 }
 
 class Coordenador
 {
-    private static Processo _processoCoordenador;
+    private static Processo? _processoCoordenador;
     private static readonly object _lock = new object();
     private List<Processo> _fila = new List<Processo>();
     private List<bool> _recursosDisponiveis = new List<bool> { true, true }; // Dois recursos
     private Random _random = new Random();
+    private CancellationTokenSource _cts = new CancellationTokenSource();
    
     public Coordenador() { }
 
@@ -52,11 +66,12 @@ class Coordenador
     {
         lock (_lock)
         {
-            if (!_fila.Contains(processo) && !processo.EhCoordenador)
+            if (!_fila.Contains(processo) && processo.PodeAcessarRecurso())
             {
                 _fila.Add(processo);
+                processo.IsAcessandoRecurso = true;
                 Console.WriteLine($"[{DateTime.Now}] Processo {processo.Id} adicionado à fila.");
-                MostrarFila();
+                // MostrarFila();
             }
         }
     }
@@ -85,13 +100,23 @@ class Coordenador
 
     private void LiberarRecurso(Processo processo, int recursoIndex)
     {
-        Thread.Sleep(_random.Next(5000, 15000)); // Simula o tempo de processamento
+        
+        bool IsOK = WaitTimeLiberacaoRecurso(processo.Id, recursoIndex); // Simula o tempo de processamento
+        
         lock (_lock)
         {
+            if (!IsOK)
+            {
+                // A thread foi cancelada, coordenador morreu.
+                _recursosDisponiveis[recursoIndex] = true;
+                processo.IsAcessandoRecurso = false;
+                return;   
+            }
             // Verifica se o índice é válido
             if (recursoIndex >= 0 && recursoIndex < _recursosDisponiveis.Count)
             {
                 _recursosDisponiveis[recursoIndex] = true; // Recurso liberado
+                processo.IsAcessandoRecurso = false;
                 Console.WriteLine($"[{DateTime.Now}] Processo {processo.Id} liberou o recurso {recursoIndex + 1}.");
                 MostrarFila();
             }
@@ -102,6 +127,19 @@ class Coordenador
         }
     }
 
+    private bool WaitTimeLiberacaoRecurso(int IdProcesso, int IdRecurso)
+    {
+        int delay = _random.Next(5000, 15000);
+        bool cancelado = _cts.Token.WaitHandle.WaitOne(delay);
+        
+        if (cancelado)
+        {
+            Console.WriteLine($"[{DateTime.Now}]  Processo {IdProcesso} liberou o recurso {IdRecurso + 1} pois o coordenador morreu.");
+            return false;
+        }
+        return true;
+    }
+
     public void Morrer()
     {
         lock (_lock)
@@ -110,6 +148,8 @@ class Coordenador
             _recursosDisponiveis = new List<bool> { true, true }; // Reseta os recursos
             Console.WriteLine($"[{DateTime.Now}] Coordenador morreu. Fila limpa e recursos resetados.");
             _processoCoordenador = null;
+            _cts.Cancel(); // Cancelando todas as threads que estão processando os recursos
+            _cts = new CancellationTokenSource();
         }
     }
 
@@ -124,7 +164,7 @@ class Coordenador
             Processo novoCoordenador = processos[index];
 
             _processoCoordenador = novoCoordenador;
-            processos[index].EhCoordenador = true;
+            processos[index].IsCoordenador = true;
             // Encontra e interrompe a thread do novo coordenador
             if (index != -1 && index < processosThreads.Count)
             {
@@ -218,7 +258,6 @@ class Program
         {
             if (!PrimeiraExecucao)
             {
-
                 Thread.Sleep(40000); // Cria um novo processo a cada 40 segundos
             }
 
@@ -242,6 +281,7 @@ class Program
         {
             try
             {
+                processo.WaitLiberarRecurso();
                 Thread.Sleep(_random.Next(10000, 25000)); // Tenta acessar o recurso a cada 10-25 segundos
                 _coordenador.AdicionarProcesso(processo);
             }
